@@ -23,35 +23,133 @@ namespace Com.Ladpc.Util.SSO
 {
     public class SimpleSSO
     {
+        public readonly Encoding charEncoding;
         public readonly HMAC hmac;
-        public readonly bool tokenOnly;
+        public readonly bool resEncAll;
+        public readonly EncType resEncoding;
+        
+        public enum EncType { HEXSTRING, BASE64 };
 
-        public SimpleSSO(HMAC hmac, bool tokenOnly)
+        /// <summary>
+        /// Constructor that takes all user settable options. Note that the given
+        /// <paramref name="hmac"/> needs to be initialized with your secret key.
+        /// </summary>
+        /// <param name="charEncoding">The character encoding of the user data
+        /// provided to this class's methods.</param>
+        /// <param name="hmac">An instance of <see cref="HMAC"/> algorithem
+        /// initialized with your secret key.</param>
+        /// <param name="resEncAll">Set to <c>False</c> to text-encode just the
+        /// hash-mac. Otherwise, set to <c>True</c>, to text-encode a complete
+        /// string in the form: "user-data:timestamp:hmac".<br/>
+        /// Where "user-data" is a ':' joined string of the user-data elements.
+        /// </param>
+        /// <param name="resEncoding">Either <c>Base64</c> or <c>Hex String</c>
+        /// representation of the (partialy) binary result to returm.</param>
+        public SimpleSSO(Encoding charEncoding, HMAC hmac, bool resEncAll, EncType resEncoding)
         {
+            if (charEncoding == null || hmac == null)
+                throw new ArgumentNullException();
+            else if (!Enum.IsDefined(typeof(EncType), resEncoding))
+                throw new ArgumentOutOfRangeException("resEncoding");
+            
+            this.charEncoding = charEncoding;
             this.hmac = hmac;
-            this.tokenOnly = tokenOnly;
+            this.resEncAll = resEncAll;
+            this.resEncoding = resEncoding;
         }
 
-        public SimpleSSO(string key, bool tokenOnly) : 
-            this(new HMACSHA256(Encoding.Default.GetBytes(key)), tokenOnly) { }
+        /// <summary>
+        /// Constructor that creates an instance with these parameters:
+        /// <list type="bullet">
+        /// <item><description><c>UTF8</c> Encoding,</description></item>
+        /// <item><description>an <see cref="HMACSHA256"/> initialized with the
+        /// provided <paramref name="key"/>,</description></item>
+        /// <item><description>text-encoding the hmac only</description></item>
+        /// <item><description>result encoding as hex string</description></item>
+        /// </list>
+        /// </summary>
+        /// <param name="key">The secret key phrase.</param>
+        public SimpleSSO(string key) : this(
+            Encoding.UTF8,
+            new HMACSHA256(Encoding.UTF8.GetBytes(key)),
+            false,
+            EncType.HEXSTRING) { }
 
-        public SimpleSSO(string key) :
-            this(new HMACSHA256(Encoding.Default.GetBytes(key)), false) { }
-
-        public string CreateToken(string Key, params string[] Data)
+        public string[] CreateTokens(string data, params string[] more)
         {
-            string ms = Math.Truncate((DateTime.Now - new DateTime(1970, 1, 1)).TotalMilliseconds).ToString();
-            string message = String.Join(":", Data) + ":" + ms;
-            byte[] ba = hmac.ComputeHash(Encoding.Default.GetBytes(message));
+            // Note: Correctness depens on encoding not using ':',
+            //       i.e. if we allow ASCII85 this call may fail.
+            return CreateToken(data, more).Split(':');
+        }
 
-            if (tokenOnly) {
-                // TODO: retern hexstring
+        public string CreateToken(string data, params string[] more)
+        {
+            if (String.IsNullOrEmpty(data))
+                throw new ArgumentNullException("data");
+
+            string message = CreateMessage(data, more);
+            byte[] ba = charEncoding.GetBytes(message);
+            byte[] hash = hmac.ComputeHash(ba);
+            if (resEncAll)
+            {
+                return Encode(ConcatenateArrays(ba, hash));
             }
             else
             {
-
+                return message + ":" + Encode(hash);
             }
         }
 
+        private string CreateMessage(string data, string[] more)
+        {
+            string ms = Math.Truncate((DateTime.Now - new DateTime(1970, 1, 1)).TotalMilliseconds).ToString();
+            StringBuilder sb = new StringBuilder(data);
+            if (more.Length > 0)
+                sb.Append(':')
+                  .Append(String.Join(":", more));
+            sb.Append(':').Append(ms);
+            return sb.ToString();
+        }
+
+        private byte[] ConcatenateArrays(params byte[][] arrays)
+        {
+            int pos = 0;
+            foreach (var arr in arrays)
+            {
+                pos += arr.Length;
+            }
+            byte[] temp = new byte[pos];
+
+            pos = 0;
+            foreach (var arr in arrays)
+            {
+                Array.Copy(arr, 0, temp, pos, arr.Length);
+                pos += arr.Length;
+            }
+
+            return temp;
+        }
+
+        private string Encode(byte[] ba)
+        {
+            switch (resEncoding)
+            {
+                case EncType.HEXSTRING:
+                    StringBuilder sb = new StringBuilder(ba.Length * 2);
+                    foreach (var b in ba)
+                    {
+                        sb.AppendFormat("{0:x2}", b);
+                    }
+                    return sb.ToString();
+
+                case EncType.BASE64:
+                    return Convert.ToBase64String(ba);
+
+                default:
+                    break;
+            }
+            // We should never get here
+            throw new NotSupportedException();
+        }
     }
 }
