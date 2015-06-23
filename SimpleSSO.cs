@@ -100,14 +100,78 @@ namespace Com.Ladpc.Util.SSO
             }
         }
 
+        public bool IsValid(string token, params string[] more)
+        {
+            try
+            {
+                Validate(token, more);
+                return true;
+            }
+            catch (ArgumentException) { }
+            catch (CryptographicException) { }
+            catch (System.Security.Authentication.InvalidCredentialException) { }
+            catch (TimeoutException) { }
+            
+            return false;
+        }
+
+        public void Validate(string token, params string[] more)
+        {
+            if (String.IsNullOrEmpty(token))
+                throw new ArgumentNullException("token");
+            else if (more.Length == 1)
+                throw new ArgumentException("There may be either one token or three or more tokens.", "more");
+            else if (more.Length == 0 && token.LastIndexOf(':') == token.Length)
+                throw new ArgumentException("No hash found in token.", "token");
+
+            string message, hash;
+            byte[] ba;
+            if (more.Length == 0)
+            {
+                // Note: Correctness depens on encoding not using ':',
+                //       i.e. if we allow ASCII85 this call may fail.
+                int pos = token.LastIndexOf(':') + 1;
+                if (pos == token.Length)
+                {
+                    throw new ArgumentException("No hash found in token.", "token");
+                }
+                else if (pos == 1)
+                {
+                    throw new ArgumentException("No user data found in token.", "token");
+                }
+                else if (pos > 0)
+                {
+                    hash = token.Substring(pos);
+                    message = token.Substring(0, pos - 1);
+                }
+                else
+                {
+                    hash = token;
+                }
+
+            }
+            else
+            {
+                hash = more[more.Length - 1];
+                message = ConcatenateStrings(token, more, 0, more.Length - 1);
+            }
+
+            ba = Decode(hash);
+
+        }
+
         private string CreateMessage(string data, string[] more)
         {
             string ms = Math.Truncate((DateTime.Now - new DateTime(1970, 1, 1)).TotalMilliseconds).ToString();
+            return ConcatenateStrings(data, more, 0, more.Length) + ":" + ms;
+        }
+
+        private string ConcatenateStrings(string data, string[] more, int startIndex, int count)
+        {
             StringBuilder sb = new StringBuilder(data);
             if (more.Length > 0)
                 sb.Append(':')
-                  .Append(String.Join(":", more));
-            sb.Append(':').Append(ms);
+                  .Append(String.Join(":", more, startIndex, count));
             return sb.ToString();
         }
 
@@ -150,6 +214,11 @@ namespace Com.Ladpc.Util.SSO
             }
             // We should never get here
             throw new NotSupportedException();
+        }
+
+        private byte[] Decoce(string p)
+        {
+            throw new NotImplementedException();
         }
     }
 }
