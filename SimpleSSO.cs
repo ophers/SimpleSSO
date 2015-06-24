@@ -27,6 +27,7 @@ namespace Com.Ladpc.Util.SSO
         public readonly HMAC hmac;
         public readonly bool resEncAll;
         public readonly EncType resEncoding;
+        public readonly TimeSpan lifetime;
         
         public enum EncType { HEXSTRING, BASE64 };
 
@@ -45,7 +46,9 @@ namespace Com.Ladpc.Util.SSO
         /// </param>
         /// <param name="resEncoding">Either <c>Base64</c> or <c>Hex String</c>
         /// representation of the (partialy) binary result to returm.</param>
-        public SimpleSSO(Encoding charEncoding, HMAC hmac, bool resEncAll, EncType resEncoding)
+        /// <param name="lifetime">A <c>TimeSpan</c> for the validity of the
+        /// created token.</param>
+        public SimpleSSO(Encoding charEncoding, HMAC hmac, bool resEncAll, EncType resEncoding, TimeSpan lifetime)
         {
             if (charEncoding == null || hmac == null)
                 throw new ArgumentNullException();
@@ -56,6 +59,7 @@ namespace Com.Ladpc.Util.SSO
             this.hmac = hmac;
             this.resEncAll = resEncAll;
             this.resEncoding = resEncoding;
+            this.lifetime = lifetime;
         }
 
         /// <summary>
@@ -66,6 +70,7 @@ namespace Com.Ladpc.Util.SSO
         /// provided <paramref name="key"/>,</description></item>
         /// <item><description>text-encoding the hmac only</description></item>
         /// <item><description>result encoding as hex string</description></item>
+        /// <item><description>Five minutes expiration time</description></item>
         /// </list>
         /// </summary>
         /// <param name="key">The secret key phrase.</param>
@@ -73,7 +78,8 @@ namespace Com.Ladpc.Util.SSO
             Encoding.UTF8,
             new HMACSHA256(Encoding.UTF8.GetBytes(key)),
             false,
-            EncType.HEXSTRING) { }
+            EncType.HEXSTRING,
+            TimeSpan.FromMinutes(5)) { }
 
         public string[] CreateTokens(string data, params string[] more)
         {
@@ -102,30 +108,34 @@ namespace Com.Ladpc.Util.SSO
 
         public bool IsValid(string token, params string[] more)
         {
+            return DecodeData(token, more).Length > 0;
+        }
+
+        public string[] DecodeData(string token, params string[] more)
+        {
             try
             {
-                Validate(token, more);
-                return true;
+                return Validate(token, more);
             }
             catch (ArgumentException) { }
             catch (CryptographicException) { }
+            catch (FormatException) { }
             catch (System.Security.Authentication.InvalidCredentialException) { }
             catch (TimeoutException) { }
-            
-            return false;
+
+            return new string[0];
         }
 
-        public void Validate(string token, params string[] more)
+        public string[] Validate(string token, params string[] more)
         {
             if (String.IsNullOrEmpty(token))
                 throw new ArgumentNullException("token");
             else if (more.Length == 1)
                 throw new ArgumentException("There may be either one token or three or more tokens.", "more");
-            else if (more.Length == 0 && token.LastIndexOf(':') == token.Length)
-                throw new ArgumentException("No hash found in token.", "token");
 
-            string message, hash;
-            byte[] ba;
+            string data = null, 
+                   encodedText;
+            byte[] ba, hash;
             if (more.Length == 0)
             {
                 // Note: Correctness depens on encoding not using ':',
@@ -139,25 +149,46 @@ namespace Com.Ladpc.Util.SSO
                 {
                     throw new ArgumentException("No user data found in token.", "token");
                 }
-                else if (pos > 0)
+                else if (pos > 1)
                 {
-                    hash = token.Substring(pos);
-                    message = token.Substring(0, pos - 1);
+                    encodedText = token.Substring(pos);
+                    data = token.Substring(0, pos - 1);
                 }
-                else
+                else // pos == 0
                 {
-                    hash = token;
+                    encodedText = token;
                 }
-
             }
             else
             {
-                hash = more[more.Length - 1];
-                message = ConcatenateStrings(token, more, 0, more.Length - 1);
+                encodedText = more[more.Length - 1];
+                data = ConcatenateStrings(token, more, 0, more.Length - 1);
             }
 
-            ba = Decode(hash);
+            if (data == null) // A single encoded token
+            {
+                ba = Decode(encodedText);
+                if (ba.Length <= hmac.HashSize / 8)
+                    throw new ArgumentException("Invalid token.", "token");
+                hash = new byte[hmac.HashSize / 8];
+                Array.Copy(ba, ba.Length - hash.Length, hash, 0, hash.Length);
+                Array.Resize(ref ba, ba.Length - hash.Length);
+                data = charEncoding.GetString(ba);
+            }
+            else
+            {
+                hash = Decode(encodedText);
+                if (hash.Length != hmac.HashSize / 8)
+                    throw new ArgumentException("Invalid token.", "token");
+                ba = charEncoding.GetBytes(data);
+            }
 
+            if (!ArrayEquals(hmac.ComputeHash(ba), hash))
+                throw new System.Security.Authentication.InvalidCredentialException();
+            else if (IsExpired(data))
+                throw new TimeoutException("Token expired.");
+
+            return data.Split(':');
         }
 
         private string CreateMessage(string data, string[] more)
@@ -216,9 +247,58 @@ namespace Com.Ladpc.Util.SSO
             throw new NotSupportedException();
         }
 
-        private byte[] Decoce(string p)
+        private byte[] Decode(string encodedText)
         {
+            switch (resEncoding)
+            {
+                case EncType.HEXSTRING:
+                    byte[] ba = new byte[encodedText.Length / 2];
+                    for (int i = 0; i < ba.Length; i++)
+                    {
+                        ba[i] = (byte)(HexValue(encodedText[2 * i]) << 4 + HexValue(encodedText[2 * i + 1]));
+                    }
+                    return ba;
+
+                case EncType.BASE64:
+                    return Convert.FromBase64String(encodedText);
+
+                default:
+                    break;
+            }
+            // We should never get here
             throw new NotImplementedException();
+        }
+
+        private int HexValue(char c)
+        {
+            int b = c - '0';
+            if (b > 9) b -= 7;
+            return b;
+        }
+
+        private bool ArrayEquals(byte[] a1, byte[] a2)
+        {
+            if (ReferenceEquals(a1, a2))
+                return true;
+
+            if (a1 == null || a2 == null)
+                return false;
+
+            if (a1.Length != a2.Length)
+                return false;
+
+            for (int i = 0; i < a1.Length; i++)
+                if (a1[i] != a2[i])
+                    return false;
+
+            return true;
+        }
+
+        private bool IsExpired(string data)
+        {
+            int pos = data.LastIndexOf(':') + 1;
+            int ms = Convert.ToInt32(data.Substring(pos));
+            return (DateTime.Now - new DateTime(1970, 1, 1) - lifetime).TotalMilliseconds > ms;
         }
     }
 }
