@@ -20,8 +20,11 @@ Googling for ready made implementations I only came across specifically tailored
   `string token = sso.CreateToken("jhondoe", "jhondoe@example.com");`
 4. On the recieving side validate the token:
 ```c#
-if (sso.IsValid(_token_)
+string token = ...
+if (sso.IsValid(token)
 {
   // Do something useful
+  string[] data = token.Split(':');
+  // data[0] == "jhondoe", data[1] == "jhondoe@example.com"
 }
 ```
