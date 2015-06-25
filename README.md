@@ -21,7 +21,7 @@ Googling for ready made implementations I only came across specifically tailored
 4. On the recieving side validate the token:
 ```c#
 string token = ...
-if (sso.IsValid(token)
+if (sso.IsValid(token))
 {
   // Do something useful
   string[] data = token.Split(':');
