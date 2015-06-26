@@ -26,6 +26,7 @@ namespace Com.Ladpc.Util.SSO
         public readonly Encoding charEncoding;
         public readonly HMAC hmac;
         public readonly bool resEncAll;
+        public readonly string separator;
         public readonly EncType resEncoding;
         public readonly TimeSpan lifetime;
         
@@ -41,14 +42,16 @@ namespace Com.Ladpc.Util.SSO
         /// initialized with your secret key.</param>
         /// <param name="resEncAll">Set to <c>False</c> to text-encode just the
         /// hash-mac. Otherwise, set to <c>True</c>, to text-encode a complete
-        /// string in the form: "user-data:timestamp:hmac".<br/>
-        /// Where "user-data" is a ':' joined string of the user-data elements.
-        /// </param>
+        /// string representation of the form: "user-data:timestamp~hmac".<br/>
+        /// Where "user-data" is a ':' joined string of the user-data elements,
+        /// ':' is the 'separator' and '~' is a blank (shown for clarity).</param>
+        /// <param name="separator">A separator char for concatenating strings
+        /// into a single token.</param>
         /// <param name="resEncoding">Either <c>Base64</c> or <c>Hex String</c>
         /// representation of the (partialy) binary result to returm.</param>
         /// <param name="lifetime">A <c>TimeSpan</c> for the validity of the
         /// created token.</param>
-        public SimpleSSO(Encoding charEncoding, HMAC hmac, bool resEncAll, EncType resEncoding, TimeSpan lifetime)
+        public SimpleSSO(Encoding charEncoding, HMAC hmac, bool resEncAll, char separator, EncType resEncoding, TimeSpan lifetime)
         {
             if (charEncoding == null || hmac == null)
                 throw new ArgumentNullException();
@@ -58,6 +61,7 @@ namespace Com.Ladpc.Util.SSO
             this.charEncoding = charEncoding;
             this.hmac = hmac;
             this.resEncAll = resEncAll;
+            this.separator = separator.ToString();
             this.resEncoding = resEncoding;
             this.lifetime = lifetime;
         }
@@ -69,6 +73,7 @@ namespace Com.Ladpc.Util.SSO
         /// <item><description>an <see cref="HMACSHA256"/> initialized with the
         /// provided <paramref name="key"/>,</description></item>
         /// <item><description>text-encoding the hmac only</description></item>
+        /// <item><description>use ':' as separator</description></item>
         /// <item><description>result encoding as hex string</description></item>
         /// <item><description>Five minutes expiration time</description></item>
         /// </list>
@@ -78,6 +83,7 @@ namespace Com.Ladpc.Util.SSO
             Encoding.UTF8,
             new HMACSHA256(Encoding.UTF8.GetBytes(key)),
             false,
+            ':',
             EncType.HEXSTRING,
             TimeSpan.FromMinutes(5)) { }
 
@@ -85,7 +91,7 @@ namespace Com.Ladpc.Util.SSO
         {
             // Note: Correctness depens on encoding not using ':',
             //       i.e. if we allow ASCII85 this call may fail.
-            return CreateToken(data, more).Split(':');
+            return CreateToken(data, more).Split(separator[0]);
         }
 
         public string CreateToken(string data, params string[] more)
@@ -102,7 +108,7 @@ namespace Com.Ladpc.Util.SSO
             }
             else
             {
-                return message + ":" + Encode(hash);
+                return message + separator + Encode(hash);
             }
         }
 
@@ -140,7 +146,7 @@ namespace Com.Ladpc.Util.SSO
             {
                 // Note: Correctness depens on encoding not using ':',
                 //       i.e. if we allow ASCII85 this call may fail.
-                int pos = token.LastIndexOf(':') + 1;
+                int pos = token.LastIndexOf(separator) + 1;
                 if (pos == token.Length)
                 {
                     throw new ArgumentException("No hash found in token.", "token");
@@ -188,21 +194,21 @@ namespace Com.Ladpc.Util.SSO
             else if (IsExpired(data))
                 throw new TimeoutException("Token expired.");
 
-            return data.Split(':');
+            return data.Split(separator[0]);
         }
 
         private string CreateMessage(string data, string[] more)
         {
             string ms = Math.Truncate((DateTime.Now - new DateTime(1970, 1, 1)).TotalMilliseconds).ToString();
-            return ConcatenateStrings(data, more, 0, more.Length) + ":" + ms;
+            return ConcatenateStrings(data, more, 0, more.Length) + separator + ms;
         }
 
         private string ConcatenateStrings(string data, string[] more, int startIndex, int count)
         {
             StringBuilder sb = new StringBuilder(data);
             if (more.Length > 0)
-                sb.Append(':')
-                  .Append(String.Join(":", more, startIndex, count));
+                sb.Append(separator)
+                  .Append(String.Join(separator, more, startIndex, count));
             return sb.ToString();
         }
 
@@ -296,7 +302,7 @@ namespace Com.Ladpc.Util.SSO
 
         private bool IsExpired(string data)
         {
-            int pos = data.LastIndexOf(':') + 1;
+            int pos = data.LastIndexOf(separator) + 1;
             int ms = Convert.ToInt32(data.Substring(pos));
             return (DateTime.Now - new DateTime(1970, 1, 1) - lifetime).TotalMilliseconds > ms;
         }
